@@ -1,82 +1,5 @@
 local LABEL_KEYS = "asdfghjklqwertyuiopzxcvbnmABCDEFGHIJKLMNOPQRSTUVWXYZ"
-local INPUT_KEYS = {
-	"A",
-	"B",
-	"C",
-	"D",
-	"E",
-	"F",
-	"G",
-	"H",
-	"I",
-	"J",
-	"K",
-	"L",
-	"M",
-	"N",
-	"O",
-	"P",
-	"Q",
-	"R",
-	"S",
-	"T",
-	"U",
-	"V",
-	"W",
-	"X",
-	"Y",
-	"Z",
-	"a",
-	"b",
-	"c",
-	"d",
-	"e",
-	"f",
-	"g",
-	"h",
-	"i",
-	"j",
-	"k",
-	"l",
-	"m",
-	"n",
-	"o",
-	"p",
-	"q",
-	"r",
-	"s",
-	"t",
-	"u",
-	"v",
-	"w",
-	"x",
-	"y",
-	"z",
-	"0",
-	"1",
-	"2",
-	"3",
-	"4",
-	"5",
-	"6",
-	"7",
-	"8",
-	"9",
-	"-",
-	"_",
-	".",
-	"<Esc>",
-	"<Space>",
-	"<Enter>",
-	"<Backspace>",
-}
 
-local INPUT_CANDIDATES = {}
-for _, key in ipairs(INPUT_KEYS) do
-	INPUT_CANDIDATES[#INPUT_CANDIDATES + 1] = { on = key }
-end
-
--- Toggle literal vs. regex matching
 local set_use_regex = ya.sync(function(state, flag)
 	state.use_regex = flag
 end)
@@ -217,7 +140,7 @@ local record_all_matches = ya.sync(function(state, patterns)
 
 	-- assign keys
 	local label_idx = 1
-	for url, info in pairs(state.matches) do
+	for _, info in pairs(state.matches) do
 		found = true
 		for _ = 1, #info.starts do
 			info.keys[#info.keys + 1] = valid[label_idx]
@@ -330,7 +253,7 @@ local clear_state = ya.sync(function(state)
 	ya.render()
 end)
 
--- INFO: Initialize defaults and hardcode Flash.nvim–style colors
+-- INFO: Initialize Flash.nvim–style colors
 local init_defaults = ya.sync(function(state)
 	state.color_match_fg = "#FFFFFF"
 	state.color_match_bg = "#3E68D7"
@@ -369,18 +292,10 @@ end)
 return {
 	setup = function(state, opts)
 		if opts then
-			if opts.only_current ~= nil then
-				state.only_current = opts.only_current
-			end
-			if opts.show_status ~= nil then
-				state.show_status = opts.show_status
-			end
-			if opts.auto_exit ~= nil then
-				state.auto_exit = opts.auto_exit
-			end
-			if opts.enable_caps ~= nil then
-				state.enable_caps = opts.enable_caps
-			end
+			state.only_current = opts.only_current or state.only_current
+			state.show_status = opts.show_status or state.show_status
+			state.auto_exit = opts.auto_exit or state.auto_exit
+			state.enable_caps = opts.enable_caps or state.enable_caps
 		end
 	end,
 
@@ -393,13 +308,61 @@ return {
 		local patterns = {}
 		local last_key = ""
 
+		-- Keys to watch
+		local KEYS_LIST = {
+			"<Esc>",
+			"<Enter>",
+			"<Space>",
+			"<Backspace>",
+			"a",
+			"b",
+			"c",
+			"d",
+			"e",
+			"f",
+			"g",
+			"h",
+			"i",
+			"j",
+			"k",
+			"l",
+			"m",
+			"n",
+			"o",
+			"p",
+			"q",
+			"r",
+			"s",
+			"t",
+			"u",
+			"v",
+			"w",
+			"x",
+			"y",
+			"z",
+			"0",
+			"1",
+			"2",
+			"3",
+			"4",
+			"5",
+			"6",
+			"7",
+			"8",
+			"9",
+		}
+		local CANDS = {}
+		for _, k in ipairs(KEYS_LIST) do
+			CANDS[#CANDS + 1] = { on = k }
+		end
+
 		while true do
-			local cand = ya.which({ cands = INPUT_CANDIDATES, silent = true })
-			if not cand then
+			local idx = ya.which({ cands = CANDS, silent = true })
+			if not idx then
 				goto continue
 			end
 
-			local key = INPUT_KEYS[cand]
+			local key = KEYS_LIST[idx]
 			if key == "<Esc>" then
 				break
 			elseif key == "<Enter>" then
@@ -427,6 +390,7 @@ return {
 			if exit_loop then
 				break
 			end
+
 			if not found and get_use_regex() then
 				break
 			elseif not found and cur ~= "" then
