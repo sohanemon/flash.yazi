@@ -50,7 +50,7 @@ Add keymaps in your `~/.config/yazi/keymap.toml`. For example:
 [manager]
 prepend_keymap = [
   { on = ["f"], run = "plugin flash", desc = "Flash Search" },
-  { on = ["g", "f"], run = "plugin flash --args=autocd", desc = "Flash Jump (autocd)" }
+  { on = ["g", "f"], run = "plugin flash --autocd", desc = "Flash Jump (autocd)" }
 ]
 ```
 
@@ -75,7 +75,7 @@ Optional arguments can be passed when launching the plugin:
 Example:
 
 ```toml
-{ on = ["g", "f"], run = "plugin flash --args=autocd,show_status", desc = "Smart Jump" }
+{ on = ["g", "f"], run = "plugin flash --aautocd --show_status", desc = "Smart Jump" }
 ```
 
 ## Notes
