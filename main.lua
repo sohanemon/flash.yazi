@@ -1,6 +1,4 @@
 local LABEL_KEYS = "asdfghjklqwertyuiopzxcvbnmABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
--- Valid input keys (letters, digits, and controls)
 local INPUT_KEYS = {
 	"A",
 	"B",
@@ -73,15 +71,14 @@ local INPUT_KEYS = {
 	"<Backspace>",
 }
 
--- Build { on = KEY } list for ya.which
-local INPUT_CANDIDATES = {}
+local INPUT_CANDS = {}
 for _, k in ipairs(INPUT_KEYS) do
-	INPUT_CANDIDATES[#INPUT_CANDIDATES + 1] = { on = k }
+	INPUT_CANDS[#INPUT_CANDS + 1] = { on = k }
 end
 
--- Safely get a highlight group’s fg/bg as hex (nil if unavailable)
+-- NOTE: Safely get highlight group hex (nil if not available)
 local function hl_hex(group, kind)
-	if type(vim) ~= "table" or type(vim.api) ~= "table" or type(vim.api.nvim_get_hl_by_name) ~= "function" then
+	if not (vim and vim.api and vim.api.nvim_get_hl_by_name) then
 		return nil
 	end
 	local ok, tbl = pcall(vim.api.nvim_get_hl_by_name, group, true)
@@ -91,47 +88,45 @@ local function hl_hex(group, kind)
 	return string.format("#%06x", tbl[kind])
 end
 
--- Toggle literal vs regex matching
-local set_regex = ya.sync(function(s, flag)
-	s.use_regex = flag
+-- Toggle literal vs. regex matching
+local set_regex = ya.sync(function(s, f)
+	s.r = f
 end)
 local get_regex = ya.sync(function(s)
-	return s.use_regex
+	return s.r
 end)
 
--- Find all positions of `pat` in `name` (both lowercased)
--- Returns two arrays (starts[], ends[]) or nil,nil if none
-local function find_positions(name, pat)
+-- INFO: Find all match positions (literal or regex) in lowercase
+local function find_pos(name, pat)
 	if not pat or pat == "" then
 		return nil, nil
 	end
 	name, pat = name:lower(), pat:lower()
-	local starts, ends = {}, {}
+	local st, en = {}, {}
+	local i = 1
 	if not get_regex() then
-		local i = 1
 		while true do
 			local s, e = string.find(name, pat, i, true)
 			if not s then
 				break
 			end
-			starts[#starts + 1], ends[#ends + 1] = s, e
+			st[#st + 1], en[#en + 1] = s, e
 			i = e + 1
 		end
 	else
-		local i = 1
 		while true do
 			local s, e = string.find(name, pat, i)
 			if not s then
 				break
 			end
-			starts[#starts + 1], ends[#ends + 1] = s, e
+			st[#st + 1], en[#en + 1] = s, e
 			i = e + 1
 		end
 	end
-	return (#starts > 0) and starts or nil, (#ends > 0) and ends or nil
+	return (#st > 0) and st or nil, (#en > 0) and en or nil
 end
 
--- Return the first label key from state.matches (or nil)
+-- INFO: Return first label from s.matches
 local first_label = ya.sync(function(s)
 	if not s.matches then
 		return nil
@@ -144,82 +139,69 @@ local first_label = ya.sync(function(s)
 	return nil
 end)
 
--- Build UI spans: highlight matched substrings + insert labels
+-- INFO: Build highlight spans + labels for a filename
 local function build_spans(url, name, file, s)
 	local info = s.matches[url]
-	local starts = info.start_pos
-	local ends = info.end_pos
-	local keys = info.keys
+	local st, en, keys = info.st, info.en, info.keys
 	local spans = {}
-
-	-- Text before first match
 	if file.is_hovered then
-		spans[#spans + 1] = ui.Span(name:sub(1, starts[1] - 1))
+		spans[#spans + 1] = ui.Span(name:sub(1, st[1] - 1))
 	else
-		spans[#spans + 1] = ui.Span(name:sub(1, starts[1] - 1)):fg(s.color_unmatched)
+		spans[#spans + 1] = ui.Span(name:sub(1, st[1] - 1)):fg(s.col_unm)
 	end
-
-	for i = 1, #starts do
-		-- matched substring
-		spans[#spans + 1] = ui.Span(name:sub(starts[i], ends[i])):fg(s.color_match_fg):bg(s.color_match_bg)
-
-		-- label char
+	for i = 1, #st do
+		spans[#spans + 1] = ui.Span(name:sub(st[i], en[i])):fg(s.col_mfg):bg(s.col_mbg)
 		if keys[i] then
-			spans[#spans + 1] = ui.Span(keys[i]):fg(s.color_label_fg):bg(s.color_label_bg)
+			spans[#spans + 1] = ui.Span(keys[i]):fg(s.col_lfg):bg(s.col_lbg)
 		end
-
-		-- text between this match and next (or rest of name)
-		local next_start = (i < #starts) and (starts[i + 1] - 1) or #name
-		local seg_start = ends[i] + 1
+		local next_start = (i < #st and st[i + 1] - 1) or #name
+		local seg_start = en[i] + 1
 		if seg_start <= next_start then
 			local seg = name:sub(seg_start, next_start)
 			if file.is_hovered then
 				spans[#spans + 1] = ui.Span(seg)
 			else
-				spans[#spans + 1] = ui.Span(seg):fg(s.color_unmatched)
+				spans[#spans + 1] = ui.Span(seg):fg(s.col_unm)
 			end
 		end
 	end
-
 	return spans
 end
 
--- Scan one pane/folder for matches of `pat`, fill s.matches[url]
-local function scan_folder(pane, folder, pat, s)
+-- INFO: Scan one pane for matches
+local function scan_pane(pane, folder, pat, s)
 	if not folder then
 		return
 	end
 	for idx, file in ipairs(folder.window) do
 		local fname = file.name:gsub("\r", "?", 1)
 		local url = tostring(file.url)
-		local sp, ep = find_positions(fname, pat)
-		if sp then
+		local st, en = find_pos(fname, pat)
+		if st then
 			s.matches[url] = {
-				start_pos = sp,
-				end_pos = ep,
+				st = st,
+				en = en,
 				keys = {},
 				is_dir = file.cha.is_dir,
 				pane = pane,
-				cursor = idx,
+				cur = idx,
 			}
 		end
 	end
 end
 
--- Record all matches across current/parent/preview, assign labels
+-- INFO: Record matches across panes and assign labels
 local record_matches = ya.sync(function(s, patterns)
 	s.matches = {}
 	local found = false
-
 	for _, pat in ipairs(patterns) do
-		scan_folder("current", cx.active.current, pat, s)
+		scan_pane("current", cx.active.current, pat, s)
 		if not s.only_current then
-			scan_folder("parent", cx.active.parent, pat, s)
-			scan_folder("preview", cx.active.preview.folder, pat, s)
+			scan_pane("parent", cx.active.parent, pat, s)
+			scan_pane("preview", cx.active.preview.folder, pat, s)
 		end
 	end
-
-	-- Build valid label list, skip uppercase if !enable_caps
+	-- Build valid label list
 	local valid = {}
 	for i = 1, #LABEL_KEYS do
 		local c = LABEL_KEYS:sub(i, i)
@@ -227,17 +209,15 @@ local record_matches = ya.sync(function(s, patterns)
 			valid[#valid + 1] = c
 		end
 	end
-
-	-- Assign keys in order to each match entry
+	-- Assign labels
 	local idx = 1
 	for url, info in pairs(s.matches) do
 		found = true
-		for _ = 1, #info.start_pos do
+		for _ = 1, #info.st do
 			info.keys[#info.keys + 1] = valid[idx]
 			idx = idx + 1
 		end
 	end
-
 	if cx.active.preview.folder then
 		ya.mgr_emit("peek", { force = true })
 	end
@@ -245,22 +225,20 @@ local record_matches = ya.sync(function(s, patterns)
 	return found
 end)
 
--- Toggle highlighting on/off
+-- INFO: Toggle highlighting on/off
 local toggle_ui = ya.sync(function(s)
-	if s.ui_on then
+	if s.on then
 		Status:children_remove(s.status_id)
-		Entity.highlights = s.saved_hl
-		s.ui_on, s.status_id = nil, nil
+		Entity.highlights = s.old_hl
+		s.on, s.status_id = nil, nil
 		if cx.active.preview.folder then
 			ya.mgr_emit("peek", { force = true })
 		end
 		ya.render()
 		return
 	end
-
-	s.saved_hl = Entity.highlights
-	s.ui_on = true
-
+	s.old_hl = Entity.highlights
+	s.on = true
 	Entity.highlights = function(self)
 		local file = self._file
 		local name = file.name:gsub("\r", "?", 1)
@@ -270,10 +248,9 @@ local toggle_ui = ya.sync(function(s)
 		elseif file.is_hovered then
 			return ui.Line({ ui.Span(name) })
 		else
-			return ui.Line({ ui.Span(name):fg(s.color_unmatched) })
+			return ui.Line({ ui.Span(name):fg(s.col_unm) })
 		end
 	end
-
 	local function status_line()
 		local style = Status:style()
 		local txt = ""
@@ -282,14 +259,13 @@ local toggle_ui = ya.sync(function(s)
 		end
 		return ui.Line({ ui.Span("[SJ]" .. txt .. " "):style(style.main) })
 	end
-
 	s.status_id = Status:children_add(status_line, 1001, Status.LEFT)
 	if cx.active.preview.folder then
 		ya.mgr_emit("peek", { force = true })
 	end
 end)
 
--- If key matches a label, return that URL; else nil
+-- NOTE: Return URL if key matches a label
 local match_label = ya.sync(function(s, key)
 	if s.backsp then
 		s.backsp = nil
@@ -308,14 +284,14 @@ local match_label = ya.sync(function(s, key)
 	return nil
 end)
 
--- Handle one key: jump on label, else re‐scan matches
+-- INFO: Handle one keypress: jump or re‐scan
 local handle_input = ya.sync(function(s, patterns, key)
 	local url = match_label(key)
 	if url then
 		local info = s.matches[url]
 		if not s.autocd and info.pane == "current" then
 			local f = cx.active.current
-			local off = info.cursor - f.cursor - 1 + f.offset
+			local off = info.cur - f.cursor - 1 + f.offset
 			ya.mgr_emit("arrow", { off })
 		elseif s.autocd and info.is_dir then
 			ya.mgr_emit("cd", { url })
@@ -324,18 +300,16 @@ local handle_input = ya.sync(function(s, patterns, key)
 		end
 		return true, true
 	end
-
 	s.matches = nil
 	local found = record_matches(patterns)
 	ya.render()
-	if not found and (s.use_regex or patterns[1] ~= "") and s.auto_exit then
+	if not found and (s.r or patterns[1] ~= "") and s.auto_exit then
 		return true, found
-	else
-		return false, found
 	end
+	return false, found
 end)
 
--- Clear transient state
+-- INFO: Clear transient state
 local clear_state = ya.sync(function(s)
 	s.matches = nil
 	s.backsp = nil
@@ -343,13 +317,13 @@ local clear_state = ya.sync(function(s)
 	ya.render()
 end)
 
--- Initialize defaults + fetch Flash.nvim colors if possible
+-- INFO: Initialize defaults and fetch Flash.nvim colors
 local set_defaults = ya.sync(function(s)
-	s.color_match_fg = hl_hex("FlashMatch", "foreground") or "#000000"
-	s.color_match_bg = hl_hex("FlashMatch", "background") or "#FFD700"
-	s.color_label_fg = hl_hex("FlashLabel", "foreground") or "#FFFFFF"
-	s.color_label_bg = hl_hex("FlashLabel", "background") or "#FF0000"
-	s.color_unmatched = hl_hex("FlashBackdrop", "foreground") or "#888888"
+	s.col_mfg = hl_hex("FlashMatch", "foreground") or "#000000"
+	s.col_mbg = hl_hex("FlashMatch", "background") or "#FFD700"
+	s.col_lfg = hl_hex("FlashLabel", "foreground") or "#FFFFFF"
+	s.col_lbg = hl_hex("FlashLabel", "background") or "#FF0000"
+	s.col_unm = hl_hex("FlashBackdrop", "foreground") or "#888888"
 	s.only_current = s.only_current or false
 	s.search_pat = ""
 	s.show_status = s.show_status or false
@@ -358,7 +332,7 @@ local set_defaults = ya.sync(function(s)
 	return s.search_pat
 end)
 
--- Handle backspace: drop last char, mark backsp = true, return (new_str, dropped_char)
+-- FIX: Backspace handler
 local backspace = ya.sync(function(s, cur)
 	local last = cur:sub(-2, -2)
 	local nxt = cur:sub(1, -2)
@@ -368,24 +342,19 @@ local backspace = ya.sync(function(s, cur)
 	return nxt, last
 end)
 
--- Update status bar text with current input
+-- INFO: Update status‐bar text
 local update_status = ya.sync(function(s, cur)
-	if s.use_regex then
-		s.search_pat = "[~]"
-	else
-		s.search_pat = cur
-	end
+	s.search_pat = get_regex() and "[~]" or cur
 	ya.render()
 end)
 
--- Parse “autocd” argument
+-- INFO: Parse “autocd” arg
 local parse_args = ya.sync(function(s, args)
 	s.autocd = (args[1] == "autocd")
 end)
 
 return {
 	setup = function(s, opts)
-		-- Allow override of options (colors come from Flash.nvim by default)
 		if opts then
 			if opts.only_current ~= nil then
 				s.only_current = opts.only_current
@@ -405,8 +374,6 @@ return {
 	entry = function(_, job)
 		set_defaults()
 		parse_args(job.args)
-
-		-- Show the UI overlay
 		toggle_ui()
 
 		local cur = ""
@@ -414,7 +381,7 @@ return {
 		local last_key = ""
 
 		while true do
-			local cand = ya.which({ cands = INPUT_CANDIDATES, silent = true })
+			local cand = ya.which({ cands = INPUT_CANDS, silent = true })
 			if not cand then
 				goto cont
 			end
