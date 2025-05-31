@@ -1,60 +1,6 @@
--- Keys used for labeling matches
-local LABEL_KEYS = {
-	"j",
-	"f",
-	"d",
-	"k",
-	"l",
-	"h",
-	"g",
-	"a",
-	"s",
-	"o",
-	"i",
-	"e",
-	"u",
-	"n",
-	"c",
-	"m",
-	"r",
-	"p",
-	"b",
-	"t",
-	"w",
-	"v",
-	"x",
-	"y",
-	"q",
-	"z",
-	"I",
-	"J",
-	"L",
-	"H",
-	"A",
-	"B",
-	"Y",
-	"D",
-	"E",
-	"F",
-	"G",
-	"Q",
-	"R",
-	"T",
-	"U",
-	"V",
-	"W",
-	"X",
-	"Z",
-	"C",
-	"K",
-	"M",
-	"N",
-	"O",
-	"P",
-	"S",
-}
+local LABEL_KEYS = "asdfghjklqwertyuiopzxcvbnmABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
--- All valid input keys (letters, digits, and control keys)
+-- Valid input keys (letters, digits, and controls)
 local INPUT_KEYS = {
 	"A",
 	"B",
@@ -127,76 +73,70 @@ local INPUT_KEYS = {
 	"<Backspace>",
 }
 
--- Candidate definitions for ya.which
+-- Build { on = KEY } list for ya.which
 local INPUT_CANDIDATES = {}
-for _, key in ipairs(INPUT_KEYS) do
-	table.insert(INPUT_CANDIDATES, { on = key })
+for _, k in ipairs(INPUT_KEYS) do
+	INPUT_CANDIDATES[#INPUT_CANDIDATES + 1] = { on = k }
 end
 
--- Enable or disable “regex” matching mode
-local setRegexMatch = ya.sync(function(state, use_regex)
-	state.use_regex = use_regex
+-- Safely get a highlight group’s fg/bg as hex (nil if unavailable)
+local function hl_hex(group, kind)
+	if type(vim) ~= "table" or type(vim.api) ~= "table" or type(vim.api.nvim_get_hl_by_name) ~= "function" then
+		return nil
+	end
+	local ok, tbl = pcall(vim.api.nvim_get_hl_by_name, group, true)
+	if not ok or type(tbl) ~= "table" or not tbl[kind] then
+		return nil
+	end
+	return string.format("#%06x", tbl[kind])
+end
+
+-- Toggle literal vs regex matching
+local set_regex = ya.sync(function(s, flag)
+	s.use_regex = flag
+end)
+local get_regex = ya.sync(function(s)
+	return s.use_regex
 end)
 
--- Return current “regex” mode (true = regex, false = literal)
-local getRegexMatch = ya.sync(function(state)
-	return state.use_regex
-end)
-
--- Find all positions where ‘pattern’ occurs in ‘name’, both lowercased.
--- Returns two arrays: start_positions[] and end_positions[] (byte indices),
--- or nil, nil if no matches at all.
-local function findMatchPositions(name, pattern)
-	if not pattern or pattern == "" then
+-- Find all positions of `pat` in `name` (both lowercased)
+-- Returns two arrays (starts[], ends[]) or nil,nil if none
+local function find_positions(name, pat)
+	if not pat or pat == "" then
 		return nil, nil
 	end
-
-	name = string.lower(name)
-	pattern = string.lower(pattern)
-
+	name, pat = name:lower(), pat:lower()
 	local starts, ends = {}, {}
-	local use_regex = getRegexMatch()
-
-	if not use_regex then
-		-- Plain substring matching
-		local search_start = 1
+	if not get_regex() then
+		local i = 1
 		while true do
-			-- true → plain (no pattern) search
-			local s, e = string.find(name, pattern, search_start, true)
+			local s, e = string.find(name, pat, i, true)
 			if not s then
 				break
 			end
-			table.insert(starts, s)
-			table.insert(ends, e)
-			search_start = e + 1
+			starts[#starts + 1], ends[#ends + 1] = s, e
+			i = e + 1
 		end
 	else
-		-- Regex search
-		local search_start = 1
+		local i = 1
 		while true do
-			local s, e = string.find(name, pattern, search_start)
+			local s, e = string.find(name, pat, i)
 			if not s then
 				break
 			end
-			table.insert(starts, s)
-			table.insert(ends, e)
-			search_start = e + 1
+			starts[#starts + 1], ends[#ends + 1] = s, e
+			i = e + 1
 		end
 	end
-
-	if #starts > 0 then
-		return starts, ends
-	else
-		return nil, nil
-	end
+	return (#starts > 0) and starts or nil, (#ends > 0) and ends or nil
 end
 
 -- Return the first label key from state.matches (or nil)
-local getFirstMatchLabel = ya.sync(function(state)
-	if not state.matches then
+local first_label = ya.sync(function(s)
+	if not s.matches then
 		return nil
 	end
-	for _, info in pairs(state.matches) do
+	for _, info in pairs(s.matches) do
 		if #info.keys > 0 then
 			return info.keys[1]
 		end
@@ -204,44 +144,39 @@ local getFirstMatchLabel = ya.sync(function(state)
 	return nil
 end)
 
--- Build UI spans for a single filename (highlights the matched regions,
--- and inserts a label letter after each match).
-local function buildSpans(url, name, file, state)
-	local info = state.matches[url]
-	local starts = info.start_positions
-	local ends = info.end_positions
-	local keys = info.keys or {}
-
+-- Build UI spans: highlight matched substrings + insert labels
+local function build_spans(url, name, file, s)
+	local info = s.matches[url]
+	local starts = info.start_pos
+	local ends = info.end_pos
+	local keys = info.keys
 	local spans = {}
 
 	-- Text before first match
 	if file.is_hovered then
-		table.insert(spans, ui.Span(name:sub(1, starts[1] - 1)))
+		spans[#spans + 1] = ui.Span(name:sub(1, starts[1] - 1))
 	else
-		table.insert(spans, ui.Span(name:sub(1, starts[1] - 1)):fg(state.color_unmatched))
+		spans[#spans + 1] = ui.Span(name:sub(1, starts[1] - 1)):fg(s.color_unmatched)
 	end
 
 	for i = 1, #starts do
-		-- The matched substring
-		table.insert(spans, ui.Span(name:sub(starts[i], ends[i])):fg(state.color_match_text):bg(state.color_match_bg))
+		-- matched substring
+		spans[#spans + 1] = ui.Span(name:sub(starts[i], ends[i])):fg(s.color_match_fg):bg(s.color_match_bg)
 
-		-- Insert the label key immediately after the match
+		-- label char
 		if keys[i] then
-			table.insert(spans, ui.Span(keys[i]):fg(state.color_label_text):bg(state.color_label_bg))
+			spans[#spans + 1] = ui.Span(keys[i]):fg(s.color_label_fg):bg(s.color_label_bg)
 		end
 
-		-- Text between this match and the next (or after the last match)
-		if i + 1 <= #starts then
+		-- text between this match and next (or rest of name)
+		local next_start = (i < #starts) and (starts[i + 1] - 1) or #name
+		local seg_start = ends[i] + 1
+		if seg_start <= next_start then
+			local seg = name:sub(seg_start, next_start)
 			if file.is_hovered then
-				table.insert(spans, ui.Span(name:sub(ends[i] + 1, starts[i + 1] - 1)))
+				spans[#spans + 1] = ui.Span(seg)
 			else
-				table.insert(spans, ui.Span(name:sub(ends[i] + 1, starts[i + 1] - 1)):fg(state.color_unmatched))
-			end
-		else
-			if file.is_hovered then
-				table.insert(spans, ui.Span(name:sub(ends[i] + 1)))
-			else
-				table.insert(spans, ui.Span(name:sub(ends[i] + 1)):fg(state.color_unmatched))
+				spans[#spans + 1] = ui.Span(seg):fg(s.color_unmatched)
 			end
 		end
 	end
@@ -249,85 +184,73 @@ local function buildSpans(url, name, file, state)
 	return spans
 end
 
--- Scan one folder’s file list and populate state.matches[url] if ‘pattern’ matches that filename.
-local function updateMatchesInFolder(pane_name, folder, pattern, state)
+-- Scan one pane/folder for matches of `pat`, fill s.matches[url]
+local function scan_folder(pane, folder, pat, s)
 	if not folder then
 		return
 	end
-
 	for idx, file in ipairs(folder.window) do
-		local filename = file.name:gsub("\r", "?", 1)
+		local fname = file.name:gsub("\r", "?", 1)
 		local url = tostring(file.url)
-		local s_pos, e_pos = findMatchPositions(filename, pattern)
-		if s_pos then
-			state.matches[url] = {
+		local sp, ep = find_positions(fname, pat)
+		if sp then
+			s.matches[url] = {
+				start_pos = sp,
+				end_pos = ep,
 				keys = {},
-				start_positions = s_pos,
-				end_positions = e_pos,
 				is_dir = file.cha.is_dir,
-				pane = pane_name,
-				cursor_index = idx,
+				pane = pane,
+				cursor = idx,
 			}
 		end
 	end
 end
 
--- Populate state.matches with *all* matches across current, parent, and preview panes.
--- Returns true if any match was found.
-local recordMatchedFiles = ya.sync(function(state, patterns)
-	state.matches = {}
-	local found_any = false
+-- Record all matches across current/parent/preview, assign labels
+local record_matches = ya.sync(function(s, patterns)
+	s.matches = {}
+	local found = false
 
 	for _, pat in ipairs(patterns) do
-		-- Current pane
-		updateMatchesInFolder("current", cx.active.current, pat, state)
-
-		if not state.option_only_current then
-			-- Parent pane
-			updateMatchesInFolder("parent", cx.active.parent, pat, state)
-			-- Preview pane
-			updateMatchesInFolder("preview", cx.active.preview.folder, pat, state)
+		scan_folder("current", cx.active.current, pat, s)
+		if not s.only_current then
+			scan_folder("parent", cx.active.parent, pat, s)
+			scan_folder("preview", cx.active.preview.folder, pat, s)
 		end
 	end
 
-	-- Build a list of valid label keys (skip uppercase if caps‐disabled)
-	local valid_labels = {}
-	for _, key in ipairs(LABEL_KEYS) do
-		if not state.option_enable_caps and key:byte() >= 65 and key:byte() <= 90 then
-			-- Skip uppercase if option_enable_caps == false
-		else
-			table.insert(valid_labels, key)
+	-- Build valid label list, skip uppercase if !enable_caps
+	local valid = {}
+	for i = 1, #LABEL_KEYS do
+		local c = LABEL_KEYS:sub(i, i)
+		if s.enable_caps or c:byte() > 96 then
+			valid[#valid + 1] = c
 		end
 	end
 
-	-- Assign label keys (in order) to each match entry
-	local counter = 1
-	for url, info in pairs(state.matches) do
-		found_any = true
-		for _ = 1, #info.start_positions do
-			info.keys[#info.keys + 1] = valid_labels[counter]
-			counter = counter + 1
+	-- Assign keys in order to each match entry
+	local idx = 1
+	for url, info in pairs(s.matches) do
+		found = true
+		for _ = 1, #info.start_pos do
+			info.keys[#info.keys + 1] = valid[idx]
+			idx = idx + 1
 		end
 	end
 
-	-- Force‐refresh the preview pane if present
 	if cx.active.preview.folder then
 		ya.mgr_emit("peek", { force = true })
 	end
 	ya.render()
-
-	return found_any
+	return found
 end)
 
--- Show or hide the custom highlighting + status‐bar line
-local toggleUI = ya.sync(function(state)
-	if state.highlights_active or state.status_id then
-		-- Turn it off: restore the original highlight function & remove status bar
-		Status:children_remove(state.status_id)
-		Entity.highlights = state.saved_highlights
-		state.highlights_active = nil
-		state.status_id = nil
-
+-- Toggle highlighting on/off
+local toggle_ui = ya.sync(function(s)
+	if s.ui_on then
+		Status:children_remove(s.status_id)
+		Entity.highlights = s.saved_hl
+		s.ui_on, s.status_id = nil, nil
 		if cx.active.preview.folder then
 			ya.mgr_emit("peek", { force = true })
 		end
@@ -335,53 +258,49 @@ local toggleUI = ya.sync(function(state)
 		return
 	end
 
-	-- Turn it on: override the highlight function
-	state.saved_highlights = Entity.highlights
-	state.highlights_active = true
+	s.saved_hl = Entity.highlights
+	s.ui_on = true
 
 	Entity.highlights = function(self)
 		local file = self._file
-		local filename = file.name:gsub("\r", "?", 1)
+		local name = file.name:gsub("\r", "?", 1)
 		local url = tostring(file.url)
-
-		if state.matches and state.matches[url] then
-			return ui.Line(buildSpans(url, filename, file, state))
+		if s.matches and s.matches[url] then
+			return ui.Line(build_spans(url, name, file, s))
 		elseif file.is_hovered then
-			return ui.Line({ ui.Span(filename) })
+			return ui.Line({ ui.Span(name) })
 		else
-			return ui.Line({ ui.Span(filename):fg(state.color_unmatched) })
+			return ui.Line({ ui.Span(name):fg(s.color_unmatched) })
 		end
 	end
 
-	-- Add a status‐bar widget showing “:[current_pattern]” if enabled
-	local function renderStatus(self)
-		local style = self:style()
-		local pat_text = ""
-		if state.search_pattern and state.option_show_status then
-			pat_text = ":" .. state.search_pattern
+	local function status_line()
+		local style = Status:style()
+		local txt = ""
+		if s.search_pat ~= "" and s.show_status then
+			txt = ":" .. s.search_pat
 		end
-		return ui.Line({ ui.Span("[SJ]" .. pat_text .. " "):style(style.main) })
+		return ui.Line({ ui.Span("[SJ]" .. txt .. " "):style(style.main) })
 	end
 
-	state.status_id = Status:children_add(renderStatus, 1001, Status.LEFT)
-
+	s.status_id = Status:children_add(status_line, 1001, Status.LEFT)
 	if cx.active.preview.folder then
 		ya.mgr_emit("peek", { force = true })
 	end
 end)
 
--- If the user just pressed a label‐key, return that URL; otherwise nil.
-local findLabelMatch = ya.sync(function(state, key_pressed)
-	if state.backspacing then
-		state.backspacing = false
+-- If key matches a label, return that URL; else nil
+local match_label = ya.sync(function(s, key)
+	if s.backsp then
+		s.backsp = nil
 		return nil
 	end
-	if not state.matches then
+	if not s.matches then
 		return nil
 	end
-	for url, info in pairs(state.matches) do
+	for url, info in pairs(s.matches) do
 		for _, lbl in ipairs(info.keys) do
-			if lbl == key_pressed then
+			if lbl == key then
 				return url
 			end
 		end
@@ -389,186 +308,158 @@ local findLabelMatch = ya.sync(function(state, key_pressed)
 	return nil
 end)
 
--- Handle a finalized key press:
--- • If it matches a label → jump/reveal/cd accordingly, then return (true, true).
--- • Otherwise → re‐compute matches and return (should_exit, found_any).
-local handleInput = ya.sync(function(state, patterns, key_pressed)
-	local matched_url = findLabelMatch(key_pressed)
-	if matched_url then
-		local info = state.matches[matched_url]
-		if not state.args_autocd and info.pane == "current" then
-			-- Move cursor in current pane (supports “select” mode)
-			local folder = cx.active.current
-			local offset = info.cursor_index - folder.cursor - 1 + folder.offset
-			ya.mgr_emit("arrow", { offset })
-		elseif state.args_autocd and info.is_dir then
-			-- If “autocd” mode is on and it’s a directory → cd into it
-			ya.mgr_emit("cd", { matched_url })
+-- Handle one key: jump on label, else re‐scan matches
+local handle_input = ya.sync(function(s, patterns, key)
+	local url = match_label(key)
+	if url then
+		local info = s.matches[url]
+		if not s.autocd and info.pane == "current" then
+			local f = cx.active.current
+			local off = info.cursor - f.cursor - 1 + f.offset
+			ya.mgr_emit("arrow", { off })
+		elseif s.autocd and info.is_dir then
+			ya.mgr_emit("cd", { url })
 		else
-			-- Otherwise highlight/reveal that file
-			ya.mgr_emit("reveal", { matched_url })
+			ya.mgr_emit("reveal", { url })
 		end
 		return true, true
 	end
 
-	-- No label match → clear old matches and recompute
-	state.matches = nil
-	local found_any = recordMatchedFiles(patterns)
-
+	s.matches = nil
+	local found = record_matches(patterns)
 	ya.render()
-	if not found_any and (state.use_regex or patterns[1] ~= "") and state.option_auto_exit then
-		return true, found_any
+	if not found and (s.use_regex or patterns[1] ~= "") and s.auto_exit then
+		return true, found
 	else
-		return false, found_any
+		return false, found
 	end
 end)
 
--- Clear all transient search state and redraw
-local clearState = ya.sync(function(state)
-	state.matches = nil
-	state.backspacing = nil
-	state.search_pattern = nil
+-- Clear transient state
+local clear_state = ya.sync(function(s)
+	s.matches = nil
+	s.backsp = nil
+	s.search_pat = ""
 	ya.render()
 end)
 
--- Initialize default colors/options if not set yet
-local setDefaultOptions = ya.sync(function(state)
-	state.color_unmatched = state.color_unmatched or "#b2a496"
-	state.color_match_text = state.color_match_text or "#000000"
-	state.color_match_bg = state.color_match_bg or "#73AC3A"
-	state.color_label_text = state.color_label_text or "#EADFC8"
-	state.color_label_bg = state.color_label_bg or "#BA603D"
-	state.option_only_current = state.option_only_current or false
-	state.search_pattern = state.search_pattern or ""
-	state.option_show_status = state.option_show_status or false
-	state.option_auto_exit = (state.option_auto_exit == nil) and true or state.option_auto_exit
-	state.option_enable_caps = state.option_enable_caps or false
-	return state.search_pattern
+-- Initialize defaults + fetch Flash.nvim colors if possible
+local set_defaults = ya.sync(function(s)
+	s.color_match_fg = hl_hex("FlashMatch", "foreground") or "#000000"
+	s.color_match_bg = hl_hex("FlashMatch", "background") or "#FFD700"
+	s.color_label_fg = hl_hex("FlashLabel", "foreground") or "#FFFFFF"
+	s.color_label_bg = hl_hex("FlashLabel", "background") or "#FF0000"
+	s.color_unmatched = hl_hex("FlashBackdrop", "foreground") or "#888888"
+	s.only_current = s.only_current or false
+	s.search_pat = ""
+	s.show_status = s.show_status or false
+	s.auto_exit = (s.auto_exit == nil) and true or s.auto_exit
+	s.enable_caps = s.enable_caps or false
+	return s.search_pat
 end)
 
--- Backspace: remove the last character of `current_input`, set backspacing=true, and return (new_string, last_char_removed)
-local backspaceInput = ya.sync(function(state, current_input)
-	local last_char = current_input:sub(-2, -2)
-	local new_input = current_input:sub(1, -2)
-	state.backspacing = true
-	state.search_pattern = new_input
+-- Handle backspace: drop last char, mark backsp = true, return (new_str, dropped_char)
+local backspace = ya.sync(function(s, cur)
+	local last = cur:sub(-2, -2)
+	local nxt = cur:sub(1, -2)
+	s.backsp = true
+	s.search_pat = nxt
 	ya.render()
-	return new_input, last_char
+	return nxt, last
 end)
 
--- Update the status‐bar text with the current input
-local updateStatusBarInput = ya.sync(function(state, current_input)
-	if state.use_regex then
-		state.search_pattern = "[~]"
+-- Update status bar text with current input
+local update_status = ya.sync(function(s, cur)
+	if s.use_regex then
+		s.search_pat = "[~]"
 	else
-		state.search_pattern = current_input
+		s.search_pat = cur
 	end
 	ya.render()
 end)
 
--- Parse command‐line args for “autocd”
-local setDefaultArgs = ya.sync(function(state, args)
-	state.args_autocd = (args[1] == "autocd")
+-- Parse “autocd” argument
+local parse_args = ya.sync(function(s, args)
+	s.autocd = (args[1] == "autocd")
 end)
 
 return {
-	setup = function(state, opts)
-		-- Apply any user‐supplied colors or mode flags
+	setup = function(s, opts)
+		-- Allow override of options (colors come from Flash.nvim by default)
 		if opts then
-			if opts.color_unmatched then
-				state.color_unmatched = opts.color_unmatched
-			end
-			if opts.color_match_text then
-				state.color_match_text = opts.color_match_text
-			end
-			if opts.color_match_bg then
-				state.color_match_bg = opts.color_match_bg
-			end
-			if opts.color_label_text then
-				state.color_label_text = opts.color_label_text
-			end
-			if opts.color_label_bg then
-				state.color_label_bg = opts.color_label_bg
-			end
 			if opts.only_current ~= nil then
-				state.option_only_current = opts.only_current
+				s.only_current = opts.only_current
 			end
 			if opts.show_status ~= nil then
-				state.option_show_status = opts.show_status
+				s.show_status = opts.show_status
 			end
 			if opts.auto_exit ~= nil then
-				state.option_auto_exit = opts.auto_exit
+				s.auto_exit = opts.auto_exit
 			end
 			if opts.enable_caps ~= nil then
-				state.option_enable_caps = opts.enable_caps
+				s.enable_caps = opts.enable_caps
 			end
 		end
 	end,
 
 	entry = function(_, job)
-		-- Initialize defaults & arguments
-		setDefaultOptions()
-		setDefaultArgs(job.args)
+		set_defaults()
+		parse_args(job.args)
 
-		-- Show the overlay (highlight + status bar)
-		toggleUI()
+		-- Show the UI overlay
+		toggle_ui()
 
-		local input_str = ""
+		local cur = ""
 		local patterns = {}
 		local last_key = ""
 
 		while true do
-			-- Wait for one of the INPUT_CANDIDATES
 			local cand = ya.which({ cands = INPUT_CANDIDATES, silent = true })
 			if not cand then
-				goto continue
+				goto cont
 			end
 
 			local key = INPUT_KEYS[cand]
 			if key == "<Esc>" then
 				break
 			elseif key == "<Enter>" then
-				last_key = getFirstMatchLabel()
+				last_key = first_label()
 				patterns = { "" }
 			elseif key == "<Space>" then
 				last_key = ""
-				input_str = ""
+				cur = ""
 				patterns = { "" }
-				setRegexMatch(true)
+				set_regex(true)
 			elseif key == "<Backspace>" then
-				input_str, last_key = backspaceInput(input_str)
-				patterns = { input_str }
-				setRegexMatch(false)
+				cur, last_key = backspace(cur)
+				patterns = { cur }
+				set_regex(false)
 			else
 				last_key = key
-				input_str = input_str .. string.lower(key)
-				patterns = { input_str }
-				setRegexMatch(false)
+				cur = cur .. string.lower(key)
+				patterns = { cur }
+				set_regex(false)
 			end
 
 			::reset::
-			updateStatusBarInput(input_str)
-
-			local should_exit, has_match = handleInput(patterns, last_key)
-			if should_exit then
+			update_status(cur)
+			local exit_loop, found = handle_input(patterns, last_key)
+			if exit_loop then
 				break
 			end
 
-			-- If no matches in regex‐mode, exit immediately
-			if not has_match and getRegexMatch() then
+			if not found and get_regex() then
 				break
-			elseif not has_match and input_str ~= "" then
-				-- If typing yielded zero results, backspace one char automatically
-				input_str, last_key = backspaceInput(input_str)
-				patterns = { input_str }
+			elseif not found and cur ~= "" then
+				cur, last_key = backspace(cur)
+				patterns = { cur }
 				goto reset
 			end
 
-			::continue::
+			::cont::
 		end
 
-		-- Tear down: clear highlights & state
-		clearState()
-		toggleUI()
+		clear_state()
+		toggle_ui()
 	end,
 }
