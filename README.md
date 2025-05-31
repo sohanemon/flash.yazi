@@ -2,6 +2,9 @@
 
 A [Yazi](https://yazi-rs.github.io/) plugin that enables regex-aware, label-based jumping—heavily inspired by [Flash.nvim](https://github.com/folke/flash.nvim).
 
+![Demo](./assets/demo.gif)
+
+
 ## Features
 
 - **Regex & Fuzzy Matching:** Jump to files and folders using plain text or Lua regex.
